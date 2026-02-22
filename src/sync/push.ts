@@ -1,6 +1,21 @@
 import type { ClassifiedEvent } from '../classifiers/types.js';
 import type { SightglassConfig } from '../utils/config.js';
 
+/** Filter out noisy events that add no analytical value */
+function isSignalEvent(event: ClassifiedEvent): boolean {
+  // Always keep: installs, searches, web fetches
+  if (event.isInstall) return true;
+  if (event.isSearch) return true;
+  if (event.action === 'web_search' || event.action === 'web_fetch') return true;
+
+  // Keep: bash commands that failed (error signals)
+  if (event.action === 'bash' && event.exitCode !== undefined && event.exitCode !== 0) return true;
+
+  // Drop: pure file_read, file_write, and successful non-install bash
+  // These are routine operations that create noise without insight
+  return false;
+}
+
 /** Anonymize an event before sending to the hosted API */
 function anonymizeEvent(event: ClassifiedEvent, config: SightglassConfig): Record<string, unknown> {
   const anonymized: Record<string, unknown> = {
@@ -48,7 +63,13 @@ export async function pushEvents(
     return { success: false, count: 0, error: 'No API key configured. Run: sightglass login' };
   }
 
-  const anonymized = events.map(e => anonymizeEvent(e, config));
+  // Filter to signal events only — drop file_read/file_write/routine bash noise
+  const signalEvents = events.filter(isSignalEvent);
+  if (signalEvents.length === 0) {
+    return { success: true, count: 0 };
+  }
+
+  const anonymized = signalEvents.map(e => anonymizeEvent(e, config));
 
   try {
     const response = await fetch(`${apiUrl}/api/events`, {
