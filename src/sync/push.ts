@@ -30,6 +30,8 @@ function anonymizeEvent(event: ClassifiedEvent, config: SightglassConfig): Recor
     isSearch: event.isSearch,
     abandoned: event.abandoned,
     timestamp: event.timestamp,
+    model: event.model,
+    modelVersion: event.modelVersion,
   };
 
   // Redact paths

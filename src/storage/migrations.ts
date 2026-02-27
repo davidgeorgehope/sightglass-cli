@@ -58,4 +58,18 @@ export const MIGRATIONS = [
       INSERT OR IGNORE INTO schema_version (version) VALUES (1);
     `,
   },
+  {
+    version: 2,
+    sql: `
+      ALTER TABLE events ADD COLUMN category TEXT;
+      ALTER TABLE events ADD COLUMN is_custom_build INTEGER DEFAULT 0;
+      ALTER TABLE events ADD COLUMN model TEXT;
+      ALTER TABLE events ADD COLUMN model_version TEXT;
+
+      CREATE INDEX IF NOT EXISTS idx_events_category ON events(category);
+      CREATE INDEX IF NOT EXISTS idx_events_model ON events(model);
+
+      INSERT OR IGNORE INTO schema_version (version) VALUES (2);
+    `,
+  },
 ];

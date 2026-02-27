@@ -29,6 +29,8 @@ interface CodexLogEntry {
   timestamp?: string;
   exit_code?: number;
   exitCode?: number;
+  model?: string;
+  model_version?: string;
   // Nested message format (similar to Claude Code v2)
   message?: {
     content?: Array<{
@@ -36,6 +38,7 @@ interface CodexLogEntry {
       name?: string;
       input?: Record<string, unknown>;
     }>;
+    model?: string;
   };
 }
 
@@ -64,6 +67,8 @@ function extractRaw(entry: CodexLogEntry): string | null {
 /** Parse a single Codex log entry into RawEvents */
 export function parseCodexEntry(entry: CodexLogEntry, sessionId: string): RawEvent[] {
   const results: RawEvent[] = [];
+  const model = entry.model ?? entry.message?.model;
+  const modelVersion = entry.model_version;
 
   // Direct tool call format
   const toolName = entry.tool ?? entry.name;
@@ -82,6 +87,8 @@ export function parseCodexEntry(entry: CodexLogEntry, sessionId: string): RawEve
           result: (entry.output ?? entry.result)?.slice(0, 2000),
           exitCode: entry.exitCode ?? entry.exit_code,
           cwd: undefined,
+          model,
+          modelVersion,
         });
       }
     }
@@ -104,6 +111,8 @@ export function parseCodexEntry(entry: CodexLogEntry, sessionId: string): RawEve
           action,
           raw: raw as string,
           cwd: undefined,
+          model,
+          modelVersion,
         });
       }
     }

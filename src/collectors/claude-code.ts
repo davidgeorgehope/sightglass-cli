@@ -14,6 +14,10 @@ export function parseLogEntry(
 ): RawEvent[] {
   const results: RawEvent[] = [];
 
+  // Extract model info from entry metadata
+  const model = entry.model ?? entry.message?.model;
+  const modelVersion = entry.model_version;
+
   // v1 flat format: {type: "tool_use", tool: "Bash", input: {...}}
   if (entry.type === 'tool_use' && (entry.tool || entry.name)) {
     const toolName = entry.tool ?? entry.name!;
@@ -31,6 +35,8 @@ export function parseLogEntry(
           result: entry.output?.slice(0, 2000),
           exitCode: entry.exitCode ?? entry.exit_code,
           cwd: undefined,
+          model,
+          modelVersion,
         });
       }
     }
@@ -55,6 +61,8 @@ export function parseLogEntry(
           result: undefined,
           exitCode: undefined,
           cwd: undefined,
+          model,
+          modelVersion,
         });
       }
     }

@@ -28,6 +28,8 @@ export const RawEventSchema = z.object({
   result: z.string().optional(),
   exitCode: z.number().int().optional(),
   cwd: z.string().optional(),
+  model: z.string().optional(),
+  modelVersion: z.string().optional(),
 });
 export type RawEvent = z.infer<typeof RawEventSchema>;
 
@@ -59,6 +61,9 @@ export interface ClaudeCodeLogEntry {
   timestamp?: string;
   exitCode?: number;
   exit_code?: number;
+  // Model info (extracted from session metadata)
+  model?: string;
+  model_version?: string;
   // v2 nested format
   message?: {
     content?: Array<{
@@ -67,6 +72,7 @@ export interface ClaudeCodeLogEntry {
       input?: ClaudeCodeToolCall['input'];
       id?: string;
     }>;
+    model?: string;
   };
   // tool_result format
   content?: Array<{
