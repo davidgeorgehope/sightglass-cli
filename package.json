@@ -1,6 +1,6 @@
 {
   "name": "@sightglass/cli",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Agent supply chain intelligence CLI",
   "main": "dist/cli.js",
   "bin": {
