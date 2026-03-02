@@ -708,8 +708,11 @@ hookCmd
   .command("install")
   .description("Install the Sightglass PreToolUse hook into Claude Code")
   .action(async () => {
-    const hookScriptPath = path.resolve(
-      path.dirname(new URL(import.meta.url).pathname),
+    const hookScriptPath = path.join(
+      os.homedir(),
+      ".sightglass",
+      "cli",
+      "dist",
       "hooks",
       "pretooluse.js",
     );
