@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import type { ClassifiedEvent } from '../classifiers/types.js';
 import type { SightglassConfig } from '../utils/config.js';
 
@@ -19,6 +20,9 @@ function isSignalEvent(event: ClassifiedEvent): boolean {
 /** Anonymize an event before sending to the hosted API */
 function anonymizeEvent(event: ClassifiedEvent, config: SightglassConfig): Record<string, unknown> {
   const anonymized: Record<string, unknown> = {
+    sessionId: event.sessionId
+      ? createHash("sha256").update(event.sessionId).digest("hex").slice(0, 12)
+      : undefined,
     agent: event.agent,
     action: event.action,
     classification: event.classification,
@@ -44,7 +48,7 @@ function anonymizeEvent(event: ClassifiedEvent, config: SightglassConfig): Recor
   }
 
   // Never include results (may contain sensitive output)
-  // Never include session IDs (could be used for tracking)
+  // Include a short hash of session ID for grouping (not the raw ID)
 
   return anonymized;
 }
