@@ -844,4 +844,70 @@ hookCmd
   });
 
 
+// ── sightglass uninstall ──
+
+program
+  .command('uninstall')
+  .description('Remove Sightglass completely — hooks, watcher, config, database')
+  .action(async () => {
+    console.log('');
+    console.log(chalk.hex('#c9893a').bold('  Uninstalling Sightglass...'));
+    console.log('');
+
+    // 1. Remove PreToolUse hook from Claude Code settings
+    const settingsPath = path.join(os.homedir(), '.claude', 'settings.json');
+    try {
+      if (fs.existsSync(settingsPath)) {
+        const settings = JSON.parse(fs.readFileSync(settingsPath, 'utf-8'));
+        if (settings.hooks?.PreToolUse) {
+          settings.hooks.PreToolUse = (settings.hooks.PreToolUse as Array<Record<string, string>>)
+            .filter((h) => !(h.command && h.command.includes('sightglass')));
+          if (settings.hooks.PreToolUse.length === 0) delete settings.hooks.PreToolUse;
+          if (Object.keys(settings.hooks).length === 0) delete settings.hooks;
+          fs.writeFileSync(settingsPath, JSON.stringify(settings, null, 2));
+        }
+        console.log(chalk.green('  ✓') + ' Removed hook from Claude Code settings');
+      }
+    } catch {
+      console.log(chalk.yellow('  ⚠ Could not update Claude Code settings'));
+    }
+
+    // 2. Stop and remove watcher daemon
+    const platform = os.platform();
+    if (platform === 'darwin') {
+      const plistPath = path.join(os.homedir(), 'Library', 'LaunchAgents', 'dev.sightglass.watcher.plist');
+      try {
+        childProcess.execSync(`launchctl unload ${plistPath} 2>/dev/null`);
+        fs.unlinkSync(plistPath);
+        console.log(chalk.green('  ✓') + ' Stopped and removed watcher (launchd)');
+      } catch {
+        console.log(chalk.dim('  ℹ No launchd watcher found'));
+      }
+    } else if (platform === 'linux') {
+      try {
+        childProcess.execSync('systemctl stop sightglass-watcher 2>/dev/null');
+        childProcess.execSync('systemctl disable sightglass-watcher 2>/dev/null');
+        fs.unlinkSync('/etc/systemd/system/sightglass-watcher.service');
+        childProcess.execSync('systemctl daemon-reload');
+        console.log(chalk.green('  ✓') + ' Stopped and removed watcher (systemd)');
+      } catch {
+        console.log(chalk.dim('  ℹ No systemd watcher found'));
+      }
+    }
+
+    // 3. Remove ~/.sightglass directory
+    const sgDir = path.join(os.homedir(), '.sightglass');
+    const confirm = await prompt(`  Delete ${sgDir}? (config, db, hooks, logs) [y/N] `);
+    if (confirm.toLowerCase() === 'y') {
+      fs.rmSync(sgDir, { recursive: true, force: true });
+      console.log(chalk.green('  ✓') + ' Removed ~/.sightglass');
+    } else {
+      console.log(chalk.dim('  ℹ Kept ~/.sightglass'));
+    }
+
+    console.log('');
+    console.log(chalk.green('  Sightglass uninstalled.'));
+    console.log('');
+  });
+
 program.parse();
