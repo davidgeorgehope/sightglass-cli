@@ -1,7 +1,7 @@
 import { defineConfig } from 'tsup';
 
 export default defineConfig({
-  entry: ['src/cli.ts'],
+  entry: ['src/cli.ts', 'src/hooks/pretooluse.ts'],
   format: ['esm'],
   dts: true,
   banner: {

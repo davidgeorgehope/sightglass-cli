@@ -697,4 +697,150 @@ function classificationColor(type: string): typeof chalk {
   return colors[type] ?? chalk.dim;
 }
 
+
+// ── sightglass hook ──
+
+const hookCmd = program
+  .command("hook")
+  .description("Manage Claude Code hooks for real-time interception");
+
+hookCmd
+  .command("install")
+  .description("Install the Sightglass PreToolUse hook into Claude Code")
+  .action(async () => {
+    const hookScriptPath = path.resolve(
+      path.dirname(new URL(import.meta.url).pathname),
+      "hooks",
+      "pretooluse.js",
+    );
+
+    // Check the hook script exists
+    if (!fs.existsSync(hookScriptPath)) {
+      console.log(chalk.red("  Hook script not found at " + hookScriptPath));
+      console.log(chalk.dim("  Run: npm run build"));
+      process.exit(1);
+    }
+
+    // Find or create .claude/settings.json
+    const settingsDir = path.join(os.homedir(), ".claude");
+    const settingsPath = path.join(settingsDir, "settings.json");
+    fs.mkdirSync(settingsDir, { recursive: true });
+
+    let settings: Record<string, unknown> = {};
+    if (fs.existsSync(settingsPath)) {
+      try {
+        settings = JSON.parse(fs.readFileSync(settingsPath, "utf-8"));
+      } catch {
+        // corrupted — start fresh
+      }
+    }
+
+    // Add PreToolUse hook
+    if (!settings.hooks) {
+      settings.hooks = {};
+    }
+    const hooks = settings.hooks as Record<string, unknown>;
+    if (!hooks.PreToolUse) {
+      hooks.PreToolUse = [];
+    }
+    const preToolUse = hooks.PreToolUse as Array<Record<string, string>>;
+
+    // Check if already installed
+    const alreadyInstalled = preToolUse.some(
+      (h) => h.type === "command" && h.command?.includes("sightglass"),
+    );
+
+    if (alreadyInstalled) {
+      console.log(chalk.yellow("  Sightglass hook already installed."));
+      return;
+    }
+
+    preToolUse.push({
+      type: "command",
+      command: `node ${hookScriptPath}`,
+    });
+
+    fs.writeFileSync(settingsPath, JSON.stringify(settings, null, 2));
+    console.log(chalk.green("  ✓") + " Installed PreToolUse hook in Claude Code");
+    console.log(chalk.dim("  Settings: " + settingsPath));
+    console.log("");
+    console.log(chalk.dim("  The hook will evaluate package installs in real-time."));
+    console.log(
+      chalk.dim("  It checks against the Sightglass API + local known issues DB."),
+    );
+    console.log("");
+  });
+
+hookCmd
+  .command("uninstall")
+  .description("Remove the Sightglass PreToolUse hook from Claude Code")
+  .action(async () => {
+    const settingsPath = path.join(os.homedir(), ".claude", "settings.json");
+    if (!fs.existsSync(settingsPath)) {
+      console.log(chalk.yellow("  No Claude Code settings found."));
+      return;
+    }
+
+    let settings: Record<string, unknown>;
+    try {
+      settings = JSON.parse(fs.readFileSync(settingsPath, "utf-8"));
+    } catch {
+      console.log(chalk.red("  Could not parse settings.json"));
+      process.exit(1);
+    }
+
+    const hooks = settings.hooks as Record<string, unknown> | undefined;
+    if (!hooks?.PreToolUse) {
+      console.log(chalk.yellow("  No PreToolUse hooks found."));
+      return;
+    }
+
+    const preToolUse = hooks.PreToolUse as Array<Record<string, string>>;
+    const filtered = preToolUse.filter(
+      (h) => !(h.type === "command" && h.command?.includes("sightglass")),
+    );
+
+    if (filtered.length === preToolUse.length) {
+      console.log(chalk.yellow("  Sightglass hook not found in settings."));
+      return;
+    }
+
+    hooks.PreToolUse = filtered;
+    fs.writeFileSync(settingsPath, JSON.stringify(settings, null, 2));
+    console.log(chalk.green("  ✓") + " Removed Sightglass PreToolUse hook");
+  });
+
+hookCmd
+  .command("status")
+  .description("Check if the Sightglass hook is installed")
+  .action(async () => {
+    const settingsPath = path.join(os.homedir(), ".claude", "settings.json");
+    if (!fs.existsSync(settingsPath)) {
+      console.log(chalk.dim("  Not installed — no Claude Code settings found."));
+      return;
+    }
+
+    let settings: Record<string, unknown>;
+    try {
+      settings = JSON.parse(fs.readFileSync(settingsPath, "utf-8"));
+    } catch {
+      console.log(chalk.red("  Could not parse settings.json"));
+      return;
+    }
+
+    const hooks = settings.hooks as Record<string, unknown> | undefined;
+    const preToolUse = (hooks?.PreToolUse ?? []) as Array<Record<string, string>>;
+    const installed = preToolUse.some(
+      (h) => h.type === "command" && h.command?.includes("sightglass"),
+    );
+
+    if (installed) {
+      console.log(chalk.green("  ✓") + " Sightglass PreToolUse hook is installed");
+    } else {
+      console.log(chalk.dim("  ✗ Sightglass PreToolUse hook is not installed"));
+      console.log(chalk.dim("    Run: sightglass hook install"));
+    }
+  });
+
+
 program.parse();
