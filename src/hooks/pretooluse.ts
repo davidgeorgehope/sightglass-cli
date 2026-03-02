@@ -5,6 +5,9 @@
  * calls the Sightglass API for evaluation, and returns a block decision
  * if the package has issues.
  *
+ * The API does all the heavy lifting (grounded LLM eval with web search).
+ * This hook is just a thin client: detect install → call API → relay verdict.
+ *
  * Exit codes:
  *   0 = allow (pass through)
  *   2 = block (inject evaluation into agent context)
@@ -13,7 +16,8 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
-import { INSTALL_PATTERNS, KNOWN_ISSUES } from '../classifiers/types.js';
+import crypto from 'node:crypto';
+import { INSTALL_PATTERNS } from '../classifiers/types.js';
 import type { PackageManager } from '../classifiers/types.js';
 
 // ── Config loading ──
@@ -38,6 +42,47 @@ function loadConfig(): SightglassHookConfig | null {
   }
 }
 
+// ── Session-scoped bypass (second attempt = allow) ──
+
+function getSessionId(hookData: Record<string, unknown>): string {
+  const raw = (hookData.session_id as string) || 'unknown';
+  return crypto.createHash('sha256').update(raw).digest('hex').slice(0, 12);
+}
+
+function getAllowedPath(sessionId: string): string {
+  return path.join(os.tmpdir(), `sightglass-allowed-${sessionId}.json`);
+}
+
+function isAlreadyAllowed(sessionId: string, packageName: string): boolean {
+  try {
+    const data = JSON.parse(fs.readFileSync(getAllowedPath(sessionId), 'utf-8'));
+    return Array.isArray(data) && data.includes(packageName.toLowerCase());
+  } catch {
+    return false;
+  }
+}
+
+function markAllowed(sessionId: string, packageName: string): void {
+  const filePath = getAllowedPath(sessionId);
+  let existing: string[] = [];
+  try {
+    existing = JSON.parse(fs.readFileSync(filePath, 'utf-8'));
+    if (!Array.isArray(existing)) existing = [];
+  } catch { /* */ }
+  existing.push(packageName.toLowerCase());
+  fs.writeFileSync(filePath, JSON.stringify(existing));
+}
+
+// ── Decision logging ──
+
+function logDecision(entry: Record<string, unknown>): void {
+  try {
+    const logPath = path.join(os.homedir(), '.sightglass', 'decisions.jsonl');
+    fs.mkdirSync(path.dirname(logPath), { recursive: true });
+    fs.appendFileSync(logPath, JSON.stringify({ timestamp: new Date().toISOString(), ...entry }) + '\n');
+  } catch { /* non-fatal */ }
+}
+
 // ── Install pattern matching ──
 
 interface InstallMatch {
@@ -50,18 +95,12 @@ function matchInstallCommand(command: string): InstallMatch | null {
     for (const pattern of patterns) {
       const match = command.match(pattern);
       if (match?.[1]) {
-        // Extract the first package name (before any flags or spaces)
         const raw = match[1].trim();
-        // Filter out flags like --save-dev, -D, etc.
         const parts = raw.split(/\s+/).filter(p => !p.startsWith('-'));
         const packageName = parts[0];
         if (packageName) {
-          // Strip version specifiers like @^1.0.0
           const cleanName = packageName.replace(/@[\^~]?[\d].*$/, '');
-          return {
-            packageName: cleanName,
-            packageManager: manager as PackageManager,
-          };
+          return { packageName: cleanName, packageManager: manager as PackageManager };
         }
       }
     }
@@ -79,6 +118,7 @@ interface EvaluationResponse {
   size: string;
   alternative: { name: string; reason: string } | null;
   summary: string;
+  source?: string;
 }
 
 function formatEvaluationCard(evaluation: EvaluationResponse): string {
@@ -88,7 +128,7 @@ function formatEvaluationCard(evaluation: EvaluationResponse): string {
     : evaluation.verdict === 'CAUTION' ? '[CAUTION]'
     : '[SWITCH]';
 
-  lines.push(`--- Sightglass Package Evaluation ---`);
+  lines.push('--- Sightglass Package Evaluation ---');
   lines.push(`Package: ${evaluation.packageName}`);
   lines.push(`Verdict: ${verdictIcon} ${evaluation.verdict}`);
   lines.push(`Status: ${evaluation.status}`);
@@ -106,41 +146,16 @@ function formatEvaluationCard(evaluation: EvaluationResponse): string {
   }
 
   lines.push(`Summary: ${evaluation.summary}`);
-  lines.push(`---`);
+  lines.push('');
+  lines.push('If you still want this package, re-run the install and Sightglass will allow it.');
+  lines.push('---');
 
   return lines.join('\n');
-}
-
-// ── Known issues fallback ──
-
-function getKnownIssueEvaluation(packageName: string): EvaluationResponse | null {
-  const issue = KNOWN_ISSUES[packageName.toLowerCase()];
-  if (!issue) return null;
-
-  const verdictMap: Record<string, string> = {
-    vulnerability: 'SWITCH',
-    deprecated: 'SWITCH',
-    bloat: 'CAUTION',
-    unmaintained: 'CAUTION',
-  };
-
-  return {
-    packageName,
-    verdict: verdictMap[issue.type] ?? 'CAUTION',
-    status: issue.type.toUpperCase(),
-    cves: issue.source?.includes('CVE') ? [issue.source.split('/').pop()!] : [],
-    size: 'unknown',
-    alternative: issue.suggestedAlternative
-      ? { name: issue.suggestedAlternative, reason: issue.detail }
-      : null,
-    summary: issue.detail,
-  };
 }
 
 // ── Main ──
 
 async function main(): Promise<void> {
-  // Read JSON from stdin
   let input: string;
   try {
     input = fs.readFileSync(0, 'utf-8');
@@ -148,7 +163,7 @@ async function main(): Promise<void> {
     process.exit(0);
   }
 
-  let hookData: { tool_name?: string; tool_input?: { command?: string } };
+  let hookData: Record<string, unknown>;
   try {
     hookData = JSON.parse(input);
   } catch {
@@ -160,25 +175,32 @@ async function main(): Promise<void> {
     process.exit(0);
   }
 
-  const command = hookData.tool_input?.command;
+  const toolInput = hookData.tool_input as { command?: string } | undefined;
+  const command = toolInput?.command;
   if (!command) {
     process.exit(0);
   }
 
-  // Check if command matches an install pattern
   const installMatch = matchInstallCommand(command);
   if (!installMatch) {
     process.exit(0);
   }
 
   const { packageName, packageManager } = installMatch;
+  const sessionId = getSessionId(hookData);
 
-  // Try API evaluation
+  // Second attempt bypass — if we already flagged this package, let it through
+  if (isAlreadyAllowed(sessionId, packageName)) {
+    logDecision({ session_id: sessionId, package: packageName, action: 'allowed_retry', package_manager: packageManager });
+    process.exit(0);
+  }
+
+  // Call the Sightglass API (server does the LLM evaluation)
   const config = loadConfig();
   if (config) {
     try {
       const controller = new AbortController();
-      const timeout = setTimeout(() => controller.abort(), 12_000);
+      const timeout = setTimeout(() => controller.abort(), 15_000);
 
       const response = await fetch(`${config.apiUrl}/api/evaluate`, {
         method: 'POST',
@@ -195,43 +217,39 @@ async function main(): Promise<void> {
       if (response.ok) {
         const evaluation = await response.json() as EvaluationResponse;
 
-        // PROCEED = allow through, only block on CAUTION/SWITCH
         if (evaluation.verdict === 'PROCEED') {
+          logDecision({ session_id: sessionId, package: packageName, action: 'allowed', verdict: 'PROCEED', source: evaluation.source, package_manager: packageManager });
           process.exit(0);
         }
 
-        const card = formatEvaluationCard(evaluation);
+        // Block — mark as allowed for next attempt
+        markAllowed(sessionId, packageName);
 
-        // Output the hook response — block with evaluation context
-        const hookResponse = JSON.stringify({
-          decision: 'block',
-          reason: card,
+        logDecision({
+          session_id: sessionId,
+          package: packageName,
+          action: 'blocked',
+          verdict: evaluation.verdict,
+          status: evaluation.status,
+          alternative: evaluation.alternative?.name || null,
+          source: evaluation.source,
+          package_manager: packageManager,
         });
-        process.stdout.write(hookResponse);
+
+        const card = formatEvaluationCard(evaluation);
+        process.stdout.write(JSON.stringify({ decision: 'block', reason: card }));
         process.exit(2);
       }
     } catch {
-      // API unreachable — fall through to local check
+      // API unreachable — fail open
     }
   }
 
-  // Fallback: check local known issues
-  const knownEval = getKnownIssueEvaluation(packageName);
-  if (knownEval) {
-    const card = formatEvaluationCard(knownEval);
-    const hookResponse = JSON.stringify({
-      decision: 'block',
-      reason: card,
-    });
-    process.stdout.write(hookResponse);
-    process.exit(2);
-  }
-
-  // No issues found — allow
+  // No API config or API unreachable — fail open, allow the install
+  logDecision({ session_id: sessionId, package: packageName, action: 'allowed_no_api', package_manager: packageManager });
   process.exit(0);
 }
 
 main().catch(() => {
-  // On any unhandled error, fail open
   process.exit(0);
 });
