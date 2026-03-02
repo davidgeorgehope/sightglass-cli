@@ -194,9 +194,15 @@ async function main(): Promise<void> {
 
       if (response.ok) {
         const evaluation = await response.json() as EvaluationResponse;
+
+        // PROCEED = allow through, only block on CAUTION/SWITCH
+        if (evaluation.verdict === 'PROCEED') {
+          process.exit(0);
+        }
+
         const card = formatEvaluationCard(evaluation);
 
-        // Output the hook response
+        // Output the hook response — block with evaluation context
         const hookResponse = JSON.stringify({
           decision: 'block',
           reason: card,
