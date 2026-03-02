@@ -313,10 +313,12 @@ program
     console.log(chalk.hex('#c9893a').bold('  Setup complete! 🎉'));
     console.log('');
     console.log(chalk.dim('  What happens now:'));
+    console.log(chalk.dim('    • Open a new Claude Code session and start coding'));
     console.log(chalk.dim('    • When your agent installs a package, Sightglass evaluates it'));
     console.log(chalk.dim('    • Deprecated/vulnerable packages get flagged with alternatives'));
-    console.log(chalk.dim('    • All decisions are logged locally'));
-    console.log(chalk.dim('    • View your dashboard at https://sightglass.dev'));
+    console.log(chalk.dim('    • Decisions logged to ~/.sightglass/decisions.jsonl'));
+    console.log('');
+    console.log(chalk.dim('  Dashboard: https://sightglass.dev/dashboard'));
     console.log('');
   });
 
