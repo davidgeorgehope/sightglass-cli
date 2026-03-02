@@ -3,6 +3,7 @@ import chalk from 'chalk';
 import ora from 'ora';
 import { watch } from 'chokidar';
 import readline from 'node:readline';
+import childProcess from 'node:child_process';
 import {
   loadConfigWithFallback,
   loadGlobalConfig,
@@ -308,15 +309,87 @@ program
       console.log(chalk.yellow('  ⚠ Hook script not found — run: sightglass hook install'));
     }
 
-    // 6. Summary
+    // 6. Install session watcher daemon
+    console.log('');
+    const platform = os.platform();
+    const sightglassBin = process.argv[1] ?? 'sightglass';
+
+    if (platform === 'darwin') {
+      try {
+        const plistDir = path.join(os.homedir(), 'Library', 'LaunchAgents');
+        fs.mkdirSync(plistDir, { recursive: true });
+        const plistPath = path.join(plistDir, 'dev.sightglass.watcher.plist');
+        const nodePath = process.execPath;
+        const plist = `<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>dev.sightglass.watcher</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>${nodePath}</string>
+    <string>${sightglassBin}</string>
+    <string>watch</string>
+  </array>
+  <key>WorkingDirectory</key>
+  <string>${os.homedir()}</string>
+  <key>RunAtLoad</key>
+  <true/>
+  <key>KeepAlive</key>
+  <true/>
+  <key>StandardOutPath</key>
+  <string>${path.join(getGlobalSightglassDir(), 'watcher.log')}</string>
+  <key>StandardErrorPath</key>
+  <string>${path.join(getGlobalSightglassDir(), 'watcher.err')}</string>
+</dict>
+</plist>
+`;
+        fs.writeFileSync(plistPath, plist);
+        try { childProcess.execSync(`launchctl unload ${plistPath} 2>/dev/null`); } catch { /* ok */ }
+        childProcess.execSync(`launchctl load ${plistPath}`);
+        console.log(chalk.green('  ✓') + ' Session watcher installed (launchd)');
+      } catch {
+        console.log(chalk.yellow('  ⚠ Could not install launchd service'));
+        console.log(chalk.dim('    Run manually: npx @sightglass/cli watch'));
+      }
+    } else if (platform === 'linux') {
+      try {
+        const serviceFile = `[Unit]
+Description=Sightglass Session Watcher
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=${os.homedir()}
+ExecStart=${process.execPath} ${sightglassBin} watch
+Restart=on-failure
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target
+`;
+        fs.writeFileSync('/etc/systemd/system/sightglass-watcher.service', serviceFile);
+        childProcess.execSync('systemctl daemon-reload');
+        childProcess.execSync('systemctl enable sightglass-watcher');
+        childProcess.execSync('systemctl start sightglass-watcher');
+        console.log(chalk.green('  ✓') + ' Session watcher installed (systemd)');
+      } catch {
+        console.log(chalk.yellow('  ⚠ Could not install systemd service (need root?)'));
+        console.log(chalk.dim('    Run manually: npx @sightglass/cli watch'));
+      }
+    } else {
+      console.log(chalk.dim('  ℹ Run session watcher manually: npx @sightglass/cli watch'));
+    }
+
+    // 7. Summary
     console.log('');
     console.log(chalk.hex('#c9893a').bold('  Setup complete! 🎉'));
     console.log('');
     console.log(chalk.dim('  What happens now:'));
     console.log(chalk.dim('    • Open a new Claude Code session and start coding'));
-    console.log(chalk.dim('    • When your agent installs a package, Sightglass evaluates it'));
-    console.log(chalk.dim('    • Deprecated/vulnerable packages get flagged with alternatives'));
-    console.log(chalk.dim('    • Decisions logged to ~/.sightglass/decisions.jsonl'));
+    console.log(chalk.dim('    • Package installs get evaluated in real-time'));
+    console.log(chalk.dim('    • All session activity is captured automatically'));
     console.log('');
     console.log(chalk.dim('  Dashboard: https://sightglass.dev/dashboard'));
     console.log('');
