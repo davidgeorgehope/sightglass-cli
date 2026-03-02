@@ -46,37 +46,34 @@ program
 // ── Helper: readline prompt ──
 
 function prompt(question: string, isPassword = false): Promise<string> {
-  const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
   return new Promise((resolve) => {
     if (isPassword) {
-      // For passwords, disable echo
       process.stdout.write(question);
       const stdin = process.stdin;
       const wasRaw = stdin.isRaw;
       if (stdin.isTTY) stdin.setRawMode(true);
-      let password = '';
+      let value = '';
       const onData = (ch: Buffer) => {
         const c = ch.toString('utf8');
         if (c === '\n' || c === '\r' || c === '\u0004') {
           if (stdin.isTTY) stdin.setRawMode(wasRaw ?? false);
           stdin.removeListener('data', onData);
           process.stdout.write('\n');
-          rl.close();
-          resolve(password);
+          resolve(value);
         } else if (c === '\u0003') {
+          if (stdin.isTTY) stdin.setRawMode(wasRaw ?? false);
+          process.stdout.write('\n');
           process.exit(0);
         } else if (c === '\u007F' || c === '\b') {
-          if (password.length > 0) {
-            password = password.slice(0, -1);
-            process.stdout.write('\b \b');
-          }
+          if (value.length > 0) value = value.slice(0, -1);
         } else {
-          password += c;
-          process.stdout.write('*');
+          value += c;
         }
+        // No output at all — fully hidden
       };
       stdin.on('data', onData);
     } else {
+      const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
       rl.question(question, (answer) => {
         rl.close();
         resolve(answer.trim());
