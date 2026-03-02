@@ -4,12 +4,9 @@ import ora from 'ora';
 import { watch } from 'chokidar';
 import readline from 'node:readline';
 import {
-  initSightglass,
-
   loadConfigWithFallback,
   loadGlobalConfig,
   saveGlobalConfig,
-  getDbPath,
   getGlobalDbPath,
   getGlobalSightglassDir,
   detectAgents,
@@ -37,7 +34,7 @@ import type { DiscoveryType } from './classifiers/types.js';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { execSync } from 'node:child_process';
+// execSync removed — no longer needed
 
 const program = new Command();
 
@@ -190,7 +187,8 @@ function saveApiConfig(apiUrl: string, apiKey: string): void {
 
 program
   .command('setup')
-  .description('Interactive first-time setup — detect agents, login, start watcher')
+  .alias('init')
+  .description('Interactive first-time setup — detect agents, login, install hook')
   .action(async () => {
     console.log('');
     console.log(chalk.hex('#c9893a').bold('  sightglass') + ' setup');
@@ -277,134 +275,55 @@ program
       console.log(chalk.green('  ✓') + ' Already connected to sightglass.dev');
     }
 
-    // 5. Install watcher daemon
-    console.log('');
-    const platform = os.platform();
-    const sightglassBin = process.argv[1] ?? 'sightglass';
+    // 5. Install PreToolUse hook
+    const packageHookSrc = path.resolve(
+      path.dirname(new URL(import.meta.url).pathname),
+      'hooks',
+      'pretooluse.js',
+    );
+    const hookDestDir = path.join(os.homedir(), '.sightglass', 'hooks');
+    const hookDestPath = path.join(hookDestDir, 'pretooluse.js');
+    fs.mkdirSync(hookDestDir, { recursive: true });
 
-    if (platform === 'linux') {
-      try {
-        const serviceFile = `[Unit]
-Description=Sightglass Watcher
-After=network.target
+    if (fs.existsSync(packageHookSrc)) {
+      fs.copyFileSync(packageHookSrc, hookDestPath);
 
-[Service]
-Type=simple
-WorkingDirectory=${os.homedir()}
-ExecStart=${process.execPath} ${sightglassBin} watch
-Restart=on-failure
-RestartSec=10
-
-[Install]
-WantedBy=multi-user.target
-`;
-        fs.writeFileSync('/etc/systemd/system/sightglass-watcher.service', serviceFile);
-        execSync('systemctl daemon-reload', { stdio: 'ignore' });
-        execSync('systemctl enable sightglass-watcher', { stdio: 'ignore' });
-        execSync('systemctl start sightglass-watcher', { stdio: 'ignore' });
-        console.log(chalk.green('  ✓') + ' Watcher daemon installed (systemd)');
-      } catch {
-        console.log(chalk.yellow('  ⚠ Could not install systemd service (need root?)'));
-        console.log(chalk.dim('    Run manually: sightglass watch'));
+      // Register in Claude Code settings
+      const settingsDir = path.join(os.homedir(), '.claude');
+      const settingsPath = path.join(settingsDir, 'settings.json');
+      let settings: Record<string, unknown> = {};
+      if (fs.existsSync(settingsPath)) {
+        try { settings = JSON.parse(fs.readFileSync(settingsPath, 'utf-8')); } catch { /* */ }
       }
-    } else if (platform === 'darwin') {
-      try {
-        const plistDir = path.join(os.homedir(), 'Library', 'LaunchAgents');
-        fs.mkdirSync(plistDir, { recursive: true });
-        const plistPath = path.join(plistDir, 'dev.sightglass.watcher.plist');
-        const nodePath = process.execPath;
-        const cliPath = sightglassBin;
-        const plist = `<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-  <key>Label</key>
-  <string>dev.sightglass.watcher</string>
-  <key>ProgramArguments</key>
-  <array>
-    <string>${nodePath}</string>
-    <string>${cliPath}</string>
-    <string>watch</string>
-  </array>
-  <key>WorkingDirectory</key>
-  <string>${os.homedir()}</string>
-  <key>RunAtLoad</key>
-  <true/>
-  <key>KeepAlive</key>
-  <true/>
-  <key>StandardOutPath</key>
-  <string>${path.join(getGlobalSightglassDir(), 'watcher.log')}</string>
-  <key>StandardErrorPath</key>
-  <string>${path.join(getGlobalSightglassDir(), 'watcher.err')}</string>
-</dict>
-</plist>
-`;
-        fs.writeFileSync(plistPath, plist);
-        try { execSync(`launchctl unload ${plistPath} 2>/dev/null`, { stdio: 'ignore' }); } catch { /* ok */ }
-        execSync(`launchctl load ${plistPath}`, { stdio: 'ignore' });
-        console.log(chalk.green('  ✓') + ' Watcher daemon installed (launchd)');
-      } catch (err) {
-        console.log(chalk.yellow('  ⚠ Could not install launchd service'));
-        console.log(chalk.dim('    Run manually: sightglass watch'));
+      if (!settings.hooks) settings.hooks = {};
+      const hooks = settings.hooks as Record<string, unknown>;
+      if (!hooks.PreToolUse) hooks.PreToolUse = [];
+      const preToolUse = hooks.PreToolUse as Array<Record<string, string>>;
+      const alreadyInstalled = preToolUse.some(
+        (h) => h.type === 'command' && h.command?.includes('sightglass'),
+      );
+      if (!alreadyInstalled) {
+        preToolUse.push({ type: 'command', command: `node ${hookDestPath}` });
+        fs.writeFileSync(settingsPath, JSON.stringify(settings, null, 2));
       }
+      console.log(chalk.green('  ✓') + ' PreToolUse hook installed in Claude Code');
     } else {
-      console.log(chalk.dim('  ℹ Auto-daemon not supported on this platform. Run: sightglass watch'));
+      console.log(chalk.yellow('  ⚠ Hook script not found — run: sightglass hook install'));
     }
 
     // 6. Summary
     console.log('');
     console.log(chalk.hex('#c9893a').bold('  Setup complete! 🎉'));
     console.log('');
-    console.log(chalk.dim('  Your agents are now being watched.'));
-    console.log(chalk.dim('  View your dashboard at https://sightglass.dev'));
+    console.log(chalk.dim('  What happens now:'));
+    console.log(chalk.dim('    • When your agent installs a package, Sightglass evaluates it'));
+    console.log(chalk.dim('    • Deprecated/vulnerable packages get flagged with alternatives'));
+    console.log(chalk.dim('    • All decisions are logged locally'));
+    console.log(chalk.dim('    • View your dashboard at https://sightglass.dev'));
     console.log('');
   });
 
-// ── sightglass init ──
-
-program
-  .command('init')
-  .description('Initialize Sightglass in the current project')
-  .option('--global', 'Install globally instead of project-level')
-  .action(async (_opts) => {
-    const spinner = ora('Initializing Sightglass...').start();
-
-    try {
-      const { dir, config } = initSightglass();
-
-      // Create database
-      const db = new SightglassDB(getDbPath());
-      db.init();
-      db.close();
-
-      spinner.succeed('Sightglass initialized');
-      console.log('');
-      console.log(chalk.dim(`  Config: ${dir}/config.json`));
-      console.log(chalk.dim(`  Database: ${dir}/sightglass.db`));
-      console.log('');
-
-      // Show detected agents
-      const enabledAgents = Object.entries(config.agents)
-        .filter(([_, v]) => v.enabled)
-        .map(([k]) => k);
-
-      if (enabledAgents.length > 0) {
-        console.log(chalk.green(`  Detected agents: ${enabledAgents.join(', ')}`));
-      } else {
-        console.log(chalk.yellow('  No agents detected. Install Claude Code, Cursor, or Windsurf.'));
-      }
-
-      console.log('');
-      console.log(chalk.dim('  Next steps:'));
-      console.log(chalk.dim('    sightglass watch --live    Watch agent sessions in real-time'));
-      console.log(chalk.dim('    sightglass analyze         Analyze collected sessions'));
-      console.log('');
-    } catch (err) {
-      spinner.fail('Failed to initialize');
-      console.error(chalk.red(err instanceof Error ? err.message : String(err)));
-      process.exit(1);
-    }
-  });
+// (init is now an alias of setup)
 
 // ── sightglass watch ──
 
@@ -708,21 +627,28 @@ hookCmd
   .command("install")
   .description("Install the Sightglass PreToolUse hook into Claude Code")
   .action(async () => {
-    const hookScriptPath = path.join(
-      os.homedir(),
-      ".sightglass",
-      "cli",
-      "dist",
+    // Copy hook from package dist to canonical location
+    const packageHookPath = path.resolve(
+      path.dirname(new URL(import.meta.url).pathname),
       "hooks",
       "pretooluse.js",
     );
-
-    // Check the hook script exists
-    if (!fs.existsSync(hookScriptPath)) {
-      console.log(chalk.red("  Hook script not found at " + hookScriptPath));
-      console.log(chalk.dim("  Run: npm run build"));
-      process.exit(1);
+    const canonicalHookDir = path.join(os.homedir(), ".sightglass", "hooks");
+    const canonicalHookPath = path.join(canonicalHookDir, "pretooluse.js");
+    
+    fs.mkdirSync(canonicalHookDir, { recursive: true });
+    
+    if (fs.existsSync(packageHookPath)) {
+      fs.copyFileSync(packageHookPath, canonicalHookPath);
+    } else {
+      // Maybe already installed at canonical path
+      if (!fs.existsSync(canonicalHookPath)) {
+        console.log(chalk.red("  Hook script not found. Run: sightglass setup"));
+        process.exit(1);
+      }
     }
+    
+    const hookScriptPath = canonicalHookPath;
 
     // Find or create .claude/settings.json
     const settingsDir = path.join(os.homedir(), ".claude");

@@ -14,7 +14,15 @@
     "test:watch": "vitest",
     "typecheck": "tsc --noEmit"
   },
-  "keywords": ["ai", "agent", "supply-chain", "security", "audit", "dependency", "observability"],
+  "keywords": [
+    "ai",
+    "agent",
+    "supply-chain",
+    "security",
+    "audit",
+    "dependency",
+    "observability"
+  ],
   "author": "David Hope",
   "license": "MIT",
   "engines": {
@@ -38,5 +46,15 @@
     "tsup": "^8.3.0",
     "typescript": "^5.6.0",
     "vitest": "^2.1.0"
-  }
+  },
+  "files": [
+    "dist/",
+    "README.md",
+    "LICENSE"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/davidgeorgehope/sightglass-cli.git"
+  },
+  "homepage": "https://sightglass.dev"
 }
